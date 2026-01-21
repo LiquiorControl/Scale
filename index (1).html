@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Etekcity Web Connect</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f2f5; }
+        .box { background: white; padding: 20px; border-radius: 10px; max-width: 400px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { margin-bottom: 0; color: #333; }
+        .weight { font-size: 3.5em; font-weight: bold; color: #007bff; margin: 20px 0; }
+        button { background: #28a745; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 5px; cursor: pointer; }
+        button:disabled { background: #ccc; }
+        .logs { text-align: left; background: #333; color: #0f0; font-family: monospace; padding: 10px; margin-top: 20px; border-radius: 5px; height: 150px; overflow-y: auto; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<div class="box">
+    <h1>Etekcity Luminary</h1>
+    <div class="weight" id="display">--</div>
+    <div id="unit">g</div>
+    <button id="btnConnect">🔗 Conectar Balanza</button>
+    
+    <div class="logs" id="consoleLog">Esperando acción...</div>
+</div>
+
+<script>
+    // UUIDs comunes en balanzas de nutrición Etekcity / VeSync
+    const SERVICE_UUID = 0xFFF0; 
+    const CHAR_UUID    = 0xFFF1; 
+
+    const btnConnect = document.getElementById('btnConnect');
+    const display = document.getElementById('display');
+    const unitDisplay = document.getElementById('unit');
+    const logBox = document.getElementById('consoleLog');
+
+    function log(msg) {
+        logBox.innerHTML += `> ${msg}<br>`;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    btnConnect.addEventListener('click', async () => {
+        try {
+            log("Solicitando dispositivo Bluetooth...");
+            
+            // Filtramos por el servicio específico de Etekcity
+            const device = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'Etekcity' }], 
+                optionalServices: [SERVICE_UUID, '0000fff0-0000-1000-8000-00805f9b34fb']
+            });
+
+            log(`Dispositivo seleccionado: ${device.name}`);
+            
+            const server = await device.gatt.connect();
+            log("Conectado al servidor GATT");
+
+            // Intentar obtener el servicio primario
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            log("Servicio 0xFFF0 encontrado");
+
+            const characteristic = await service.getCharacteristic(CHAR_UUID);
+            log("Característica 0xFFF1 encontrada");
+
+            await characteristic.startNotifications();
+            characteristic.addEventListener('characteristicvaluechanged', parseEtekcityData);
+            
+            log("🟢 Escuchando datos...");
+            btnConnect.disabled = true;
+            btnConnect.innerText = "Conectado";
+
+        } catch (error) {
+            log(`❌ Error: ${error.message}`);
+            // Si falla, sugerimos al usuario que compruebe la consola
+            if(error.message.includes("Service not found")) {
+                log("⚠️ No se encontró el servicio 0xFFF0. Es posible que tu modelo use otro UUID.");
+            }
+        }
+    });
+
+    function parseEtekcityData(event) {
+        const value = event.target.value;
+        
+        // Etekcity Nutrition Protocol (Ingeniería inversa común)
+        // Suele enviar 17-20 bytes.
+        // Byte 11 y 12 suelen ser el peso en Little Endian.
+        
+        if (value.byteLength < 12) return;
+
+        // Intentar leer peso (bytes 11 y 12)
+        const weightRaw = value.getUint16(11, true); 
+        
+        // Byte 14 suele indicar la unidad (0=oz, 2=g, etc)
+        // Byte 16 suele indicar si es estable (1=estable)
+        
+        // Si el valor es muy alto (ej. >60000), es negativo (complemento a 2), aunque raro en balanzas de cocina.
+        
+        // Para balanzas Luminary de cocina, la resolución suele ser 1g.
+        let finalWeight = weightRaw;
+        
+        // Detectar si la balanza está en gramos o libras/onzas en el Byte 14
+        // (Esto puede variar según firmware, asumimos gramos por defecto para mostrar algo)
+        
+        display.innerText = finalWeight;
+        unitDisplay.innerText = "g (o unidades raw)";
+        
+        // Debug: mostrar bytes crudos para entender qué envía tu balanza específica
+        let hexString = '';
+        for (let i = 0; i < value.byteLength; i++) {
+            hexString += value.getUint8(i).toString(16).padStart(2, '0') + ' ';
+        }
+        log(`Data: ${hexString}`);
+    }
+</script>
+
+</body>
+</html>
